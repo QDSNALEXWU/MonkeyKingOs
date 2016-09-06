@@ -1,0 +1,67 @@
+#ifndef IDT_H
+#define IDT_H
+
+#include "x86_desc.h"
+#include "lib.h"
+#include "i8259.h"
+#include "rtc.h"
+
+#define EXEC	0
+#define INTR    1
+#define SYS		2
+// interrupt number for devices
+#define rtc_numer  8
+
+//PUSH CALL PROCESS
+void KEYBOARD_CALL();
+void RTC_CALL();
+void DIVIDE_ERROR_CALL();
+void PAGE_FAULT_CALL();
+void SYS_CALL();
+
+/* Initialize the IDT */
+void idt_init();
+
+/* Set IDT lowest level helper function */
+void set_structure(unsigned int index, int gate_type, unsigned dpl, unsigned segment,void* handler);
+
+
+//EXEC HANDLERS
+void DIVDE_ERROR();
+void DEBUG();
+void NMI();
+void INT3();
+void OVERFLOW();
+void BOUNDS();
+void INVALID_OP();
+void DEVICE_NOT_AVAILABLE();
+void DOUBLE_FAULT();
+void COPROCESSOR_SEGMENT_OVERRUN();
+void INVALID_TSS();
+void SEGMENT_NOT_PRESENT();
+void STACK_SEGMENT();
+void GENERAL_PROTECTION(uint16_t error);
+void PAGE_FAULT(int32_t error,uint32_t error_loc);
+void COPROCESSOR_ERROR();
+void ALIGNMENT_CHECK();
+
+
+//INTR HANDLERS
+
+void RTC_HANDLER();
+void SYSCALL_HANDLER();
+
+static inline void rtc_init(){
+	//mask all interrupt
+	cli();
+	const uint8_t name[]="";
+	rtc_open(name);
+
+	//connect rtc to line 8
+	enable_irq(rtc_numer);
+
+	sti();
+
+}
+
+#endif	// IDT_H

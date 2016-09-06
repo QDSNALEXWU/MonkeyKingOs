@@ -1,0 +1,15 @@
+boot.o: boot.S multiboot.h x86_desc.h types.h
+handler.o: handler.S
+x86_desc.o: x86_desc.S x86_desc.h types.h
+fileSystem.o: fileSystem.c fileSystem.h types.h multiboot.h lib.h \
+  terminal.h system_call.h paging.h rtc.h i8259.h x86_desc.h
+i8259.o: i8259.c i8259.h types.h lib.h terminal.h
+IDT.o: IDT.c IDT.h x86_desc.h types.h lib.h terminal.h i8259.h rtc.h
+kernel.o: kernel.c multiboot.h types.h x86_desc.h lib.h terminal.h \
+  i8259.h debug.h paging.h IDT.h rtc.h fileSystem.h system_call.h
+lib.o: lib.c lib.h types.h terminal.h
+paging.o: paging.c paging.h types.h lib.h terminal.h
+rtc.o: rtc.c rtc.h lib.h types.h terminal.h i8259.h
+system_call.o: system_call.c system_call.h paging.h types.h fileSystem.h \
+  multiboot.h lib.h terminal.h rtc.h i8259.h x86_desc.h
+terminal.o: terminal.c lib.h types.h terminal.h i8259.h

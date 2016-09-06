@@ -1,0 +1,102 @@
+#include "paging.h"
+#include "lib.h"
+
+uint32_t __attribute__((aligned (TABLE_ALLIGN))) page_directory[MAX_NUMBER_PAGE];
+uint32_t __attribute__((aligned (TABLE_ALLIGN))) page_table_video[MAX_NUMBER_PAGE];
+uint32_t page_available[MAX_NUMBER_PAGE];
+uint32_t process_available[MAX_PROCESS];
+uint32_t process_maping[MAX_PROCESS];
+uint32_t __attribute__((aligned (TABLE_ALLIGN))) page_table_process[MAX_PROCESS][MAX_NUMBER_PAGE];
+ 
+
+//init_paging
+//input:NONE
+//OUTPUT:NONE
+//SIDE EFFECT:Intialize page memory in the memory
+//initializes paging
+extern void init_paging(){
+	uint32_t i=0;
+	uint32_t addr=0;
+	//initialize page directory and one page table
+	for (i=0;i<MAX_NUMBER_PAGE;i++){
+		page_directory[i]=6;
+	}	
+	for (i=0;i<MAX_NUMBER_PAGE;i++){
+		page_table_video[i]=addr|VIDEO_MEMORY_PAGE_TABL_MASK;
+		addr+=PAGE_SIZE;
+	}
+	for (i=0;i<MAX_NUMBER_PAGE;i++){
+		page_available[i]=1;
+	}
+	for (i=0;i<MAX_PROCESS;i++){
+		process_available[i]=1;
+	}
+	//fill in video memory and kernal page
+	page_directory[0]=((uint32_t)&page_table_video[0])|VIDEO_MEMORY_PAGE_DIRE_MASK;
+	page_directory[1]=addr|KERNEL_PAGE_MASK;
+	//third 4MB entry to store other page tables
+	addr*=2;
+	page_directory[2]=addr|KERNEL_PAGE_MASK;
+	page_available[0]=0;
+	page_available[1]=0;
+	page_table_video[0]=0;
+	page_available[2]=0;
+	//enable paging
+	uint32_t * cr3_ptr=&page_directory[1];
+	asm volatile("movl %0,%%cr3\n\t": : "r"(cr3_ptr));
+	asm volatile("movl %0,%%cr4\n\t": : "r"(CR4_MASK));
+	asm volatile("movl %0,%%cr0\n\t": : "r"(CR0_MASK));
+}
+
+int32_t find_avail_process(){
+	int32_t i=0;
+	for (i=0;i<MAX_PROCESS;i++){
+		if (process_available[i]==1){
+			process_available[i]=0;
+			return i;
+		}
+	}
+	return -1;
+}
+
+void free_process(uint32_t index){
+	process_available[index]=1;
+	page_available[process_maping[index]]=1;
+}
+
+uint32_t allocate_new_page(uint32_t index){
+	int32_t i=0;
+	//find the first available page directory entry
+	for (i=0;i<MAX_NUMBER_PAGE;i++){
+		if (page_available[i]==1){
+			//mark the page directory as not available
+			page_available[i]=0;
+			break;
+		}
+	}
+	//keep track of the page index of each process
+	process_maping[index]=i;
+	//store physical address
+	uint32_t phy_addr=i*FOUR_MB;
+	//copy the parent process page directory into process array
+	for (i=0;i<MAX_NUMBER_PAGE;i++){
+		page_table_process[index][i]=page_directory[i];
+	}
+	//set correct address for the new process
+	page_table_process[index][VIRTUAL_ADDR_START>>22]=((phy_addr&PDE_MASK)|PROCESS_PAGE_MASK);
+	/*printf("%#x\n",page_table_process[index]);
+	printf("%#x\n",page_directory);
+	printf("%#x\n",page_table_video);
+	printf("%#x\n",page_available);
+	printf("%#x\n",page_table_process);
+	printf("%#x\n",process_maping);
+	printf("%#x\n",process_available);*/
+	//return new cr3
+	uint32_t cr3_ptr= (uint32_t)page_table_process[index];
+	asm volatile("movl %0,%%cr3\n\t": : "r"(cr3_ptr));
+	return cr3_ptr;
+}
+
+uint32_t* get_pd_ptr(int32_t pid){
+	return page_table_process[pid];
+}

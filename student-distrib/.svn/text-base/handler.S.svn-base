@@ -1,0 +1,108 @@
+# These have to be global
+
+#inlcude "IDT.h"
+
+.globl KEYBOARD_CALL
+.globl RTC_CALL
+.globl DIVIDE_ERROR_CALL
+.globl PAGE_FAULT_CALL
+.globl SYS_CALL
+.globl GENERAL_PROTECTION_CALL
+
+//Those are used to finish the caller save process for those interrupt return
+DIVIDE_ERROR_CALL:
+	pushal
+
+	call	DIVDE_ERROR
+
+	popal
+    iret
+
+
+
+PAGE_FAULT_CALL:
+	popl %eax
+    pushal
+    movl %cr2,%ebx
+    pushl %ebx
+    pushl %eax
+
+	call	PAGE_FAULT
+	popl %eax
+    popal
+    iret
+
+
+
+KEYBOARD_CALL:
+	pushal
+
+    call 	KEYBOARD_HANDLER
+    
+    popal
+	iret
+
+RTC_CALL:
+	pushal
+
+    call 	RTC_HANDLER
+    
+    popal
+	iret
+
+
+
+
+GENERAL_PROTECTION_CALL:
+	popw %ax
+	pushal
+	pushw %ax
+	call GENERAL_PROTECTION
+	popw %ax
+	popal
+	iret
+
+
+
+SYS_CALL:
+    cmpl $1, %eax
+    jl SYS_CALL_FAULT
+    cmpl $10, %eax
+    jg SYS_CALL_FAULT
+
+    pushl   %es                    
+    pushl   %ds
+    pushl   %ebp
+    pushl   %edi
+    pushl   %esi
+    pushl  %edx
+    pushl   %ecx
+    pushl   %ebx
+    pushfl 
+    #push the three arguments
+    pushl   %edx
+    pushl   %ecx
+    pushl   %ebx
+
+    call    *jump_table(,%eax,4)
+
+    addl $12, %esp
+    #pop the three arguments
+    popfl
+    popl    %ebx                  
+    popl    %ecx
+    popl    %edx
+    popl   %esi
+    popl    %edi
+    popl    %ebp
+    popl    %ds
+    popl    %es    
+    iret
+
+SYS_CALL_FAULT:
+    xorl %eax,%eax
+    decl %eax
+    iret
+jump_table:
+    .long 0x0, halt, execute, read, write,open, close# getargs, vidmap, set_handler, sigreturn
+

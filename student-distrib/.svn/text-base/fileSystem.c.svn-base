@@ -1,0 +1,451 @@
+#include "fileSystem.h"
+
+
+
+#define FILE_NAME_LENGTH 32
+#define MAX_FILE_NUM 63
+#define DIR_ENTRY_SIZE 64
+#define FOUR_B 4
+#define FOUR_KB 4096
+#define max_inode 999
+#define start_addr_offset 24
+#define fd_maximum 8
+
+uint32_t cur_file=0;
+uint32_t max_file=0;
+
+ /* 
+ * read_dentry_by_name
+ *   Description: search the directory by name and fill its info to argument ptr
+ *	 INPUTS: file nama and directory ptr
+ *   RETURN VALUE: -1 on failure, read bytes if success
+ *   SIDE EFFECTS: none
+ */
+int32_t read_dentry_by_name (const uint8_t* fname, dir_entry* dentry_ptr){
+	if(dentry_ptr==NULL)
+	return -1; //if fail
+	
+	if (*fname == '.')  // the directory itself
+	{
+		dentry_ptr->file_name[0] = '.';
+		dentry_ptr->file_type = 1; //1: directory
+		
+	}
+
+	// FILE_SYS_START need to be initialized 
+	uint32_t file_adrs = FILE_SYS_START + DIR_ENTRY_SIZE;
+	int x;
+	int8_t* filename_ptr;
+
+	for (x = 0; x < MAX_FILE_NUM; ++x) // check all file
+	{
+		
+		filename_ptr = (int8_t *)(file_adrs); // current directory ptr
+		//filename_ptr = current_dir_ptr; // current name ptr
+		
+		if (strncmp((int8_t*)fname, filename_ptr, FILE_NAME_LENGTH)==0)//check if the name is correct
+		{
+			//strcpy(dentry_ptr->file_name, filename_ptr);
+			//get the ptr to the file type
+			file_adrs+=FILE_NAME_LENGTH;
+			//read file type
+			dentry_ptr->file_type = *((unsigned int*)file_adrs);
+			
+			file_adrs+= FOUR_B;
+			//read inode
+			dentry_ptr->inode = *((unsigned int *)file_adrs);
+
+			return 0;
+		}
+
+		file_adrs+=DIR_ENTRY_SIZE;
+	}
+
+	return -1;
+
+}
+ /* 
+ * read_dentry_by_name
+ *   Description: search the directory by inode index and fill its info to argument ptr
+ *	 INPUTS: file nama and directory ptr
+ *   RETURN VALUE: -1 on failure, read bytes if success
+ *   SIDE EFFECTS: none
+ */
+
+int32_t read_dentry_by_index (uint32_t index, dir_entry* dentry_ptr){
+	if(dentry_ptr==NULL)
+	return -1; //if fail
+
+	uint32_t file_start_adrs = FILE_SYS_START;
+	uint32_t* inode_num_ptr = (unsigned int*) (file_start_adrs+FOUR_B);
+
+	uint32_t MAX_NUM_INODES = *(inode_num_ptr);
+	//check if the index is valid or not
+	if (MAX_NUM_INODES<index+1||index<0)
+	{
+		return -1;
+	}
+
+	file_start_adrs =  FILE_SYS_START + index * DIR_ENTRY_SIZE + DIR_ENTRY_SIZE; // one extra entry for the boot
+	//change the ptr_type
+	uint32_t *  temp = (unsigned int*)file_start_adrs;
+	int8_t* file_name_ptr = (int8_t *) temp;  
+	//READ THE FILE NAME
+	strcpy(dentry_ptr->file_name,file_name_ptr);
+	//READ THE FILE_TYPE
+	file_start_adrs+=FILE_NAME_LENGTH;
+	dentry_ptr->file_type = *((unsigned int*)file_start_adrs);
+	//READ TEH INODE
+	file_start_adrs+=FOUR_B;
+	dentry_ptr->inode = *((unsigned int*) file_start_adrs);
+
+	return 0;
+}
+
+ 
+ /* 
+ * read_file_sys
+ *   Description: this is the file system linkage to read file sys_call 
+ *	 INPUTS: fd, buffer ,number of bytes to read
+ *   RETURN VALUE: number of bytes read
+ *   SIDE EFFECTS: update the position number in fd
+ */
+ int32_t read_file_sys(int32_t fd , void* buf, uint32_t nbytes){
+ 	file_descriptor* tmp=&(get_pcb(cur_pid)->fd_array.files[fd]);
+ 	int byte_read=read_data((tmp->inode),tmp->position,buf,nbytes);
+ 	tmp->position+=byte_read;
+ 	return byte_read;
+ }
+ /* 
+ * read_data
+ *   Description: read data and store it in the buffer
+ *	 INPUTS: file nama and directory ptr
+ *   RETURN VALUE: -1 on failure, read bytes if success
+ *   SIDE EFFECTS: none
+ */
+int32_t read_data (uint32_t inode, uint32_t offset, uint8_t* buf, uint32_t length){
+	
+	uint32_t file_start_adrs = FILE_SYS_START;
+	uint32_t* inode_num_ptr = (uint32_t*)(file_start_adrs+FOUR_B);
+	//check if the inode number is valid
+	if (inode<0||(*(inode_num_ptr)-1)<inode)
+		return -1; 
+
+	//printf("inode_num: %x\n",(*inode_num_ptr));
+	uint32_t* block_num_ptr = (uint32_t*)(file_start_adrs+2*FOUR_B);
+	uint32_t MAX_NUM_BLOCK = *block_num_ptr;
+	//printf("MAX_NUM_BLOCK: %x\n",MAX_NUM_BLOCK);
+	
+	uint32_t* file_ptr = (uint32_t*)(file_start_adrs+(1+inode)*FOUR_KB);
+	uint32_t file_length = *file_ptr;
+	//printf("offset for file_ptr: %x\n",file_ptr);
+	//printf("file_length: %x\n",file_length);
+	if (file_length<=offset)
+	{
+		return 0;
+	}
+
+	uint32_t block=(uint32_t)file_ptr+FOUR_B+(offset/FOUR_KB)*FOUR_B;
+	uint32_t* block_ptr=(uint32_t*)block;
+	//printf("offset for block_ptr: %x\n",block_ptr);
+
+	uint32_t block_index_num = *block_ptr;
+	//printf("block_index_num: %x\n",block_index_num);
+	uint32_t remain = offset%FOUR_KB;
+
+	uint32_t return_val = 0;
+	while(length>0){
+		if (block_index_num>MAX_NUM_BLOCK-1)
+		{
+			return -1;
+		}
+
+		file_ptr = (uint32_t *)(FILE_SYS_START + (1+(*(inode_num_ptr))+block_index_num)*FOUR_KB+remain);
+		*buf = *((file_ptr));
+		remain++;
+		buf++;
+		return_val++;
+		length--;
+		if (length==0)
+		{
+			return return_val;
+		}
+
+		if (offset+return_val==(file_length))
+		{
+		 	return return_val;
+		}
+
+		if (remain==FOUR_KB)
+		{
+			remain=0;
+			block_ptr++;
+			block_index_num=*block_ptr;
+		}
+	}
+	return return_val; //if fail
+}
+
+/* 
+ * get_file_length
+ *   Description: get the length of a file
+ *	 INPUTS: dir_entry of the file
+ *   OUTPUTS: length of the file
+ *   SIDE EFFECTS: none
+ */
+int32_t get_file_length(dir_entry dentry){
+	uint32_t file_start_adrs = FILE_SYS_START;
+	int32_t inode=dentry.inode;
+	uint32_t* file_ptr = (uint32_t*)(file_start_adrs+(1+inode)*FOUR_KB);
+	return *file_ptr;
+}
+
+/* 
+ * get_fs_start
+ *   Description: get the system start address from the boot system
+ *	 INPUTS: start address
+ *   OUTPUTS: none
+ *   SIDE EFFECTS: none
+ */
+void get_fs_start(uint32_t start){
+	FILE_SYS_START=start;
+}
+
+
+/* 
+ * read_file_test
+ *   Description: test function for read file
+ *	 INPUTS: fname - name of the file to read from
+ *   OUTPUTS: 0 if success
+ *   SIDE EFFECTS: may print out debug info. Length fixed inside.
+ */
+int32_t read_file_test(uint8_t* fname,int32_t length){
+	int32_t j;
+	
+	uint32_t size=0;
+	int32_t fp;
+	dir_entry new;
+	if (( fp=read_dentry_by_name(fname, &new))>=0){
+		uint8_t buffer[length];
+		if ((size=read_data(new.inode,start_addr_offset,buffer,length))>=0){
+			printf("success %#x\n",size);
+			for (j=0;j<size;j++){
+				//16 is just fill for testing space
+				if ((j%16)==0)
+					printf("\n");
+				printf("%x ",buffer[j]);
+			}
+		}
+		else
+			printf("Error at read_data\n");
+	}
+	else
+		printf("Error at read_dentry_by_name.\n");
+	return 0;
+}
+
+/* 
+ * ls_directory
+ *   Description: test function for the filesystem
+ *	 INPUTS: none
+ *   OUTPUTS: 0 if success
+ *   SIDE EFFECTS: none
+ */
+/*int32_t ls_directory()
+{
+	int32_t length;	
+	dir_entry tmp;	
+	open_directory();
+	uint8_t buffer[32];
+	while(read_directory(buffer)!=-1)
+	{
+		read_dentry_by_name((const uint8_t*)buffer,&tmp);
+		length=get_file_length(tmp);
+		printf("%s, %d\n",buffer,length);
+	}
+	return 0;
+}*/
+
+/* 
+ * read_directory
+ *   Description: read one file name from directory
+ *	 INPUTS: output buffer
+ *   OUTPUTS: 0 if success, -1 if fail
+ *   SIDE EFFECTS: increment cur_file
+ */
+int32_t read_directory(int32_t fd, void* buf, int32_t nbytes){
+	dir_entry tmp; 
+	uint32_t i;
+	uint32_t* position=&(get_pcb(cur_pid)->fd_array.files[fd].position);
+	//check for current file position
+	if (((*position)>max_file)||(*position)<0)
+		return -1;
+	if(read_dentry_by_index((*position),&tmp)==-1)
+		return -1;
+	//increment position
+	(*position)=(*position)++;
+	uint32_t length=strlen((const int8_t* )tmp.file_name);
+	for(i=0;i<length;i++){
+		(*(uint8_t*)buf)=tmp.file_name[i];
+		buf++;
+	}
+	(*(uint8_t*)buf)='\0';
+	return length;
+}
+
+/* 
+ * open_directory
+ *   Description: initializes cur_file and max_file
+ *	 INPUTS: none
+ *   OUTPUTS: 0 if success4 
+ *   SIDE EFFECTS: increment cur_file
+ */
+int32_t open_directory(const uint8_t * filename){
+	//initialize global constants
+	max_file = *((uint32_t*)FILE_SYS_START); 
+	return 0;
+}
+/* 
+ * write_directory
+ *   Description: write the file
+ *	 INPUTS: none
+ *   OUTPUTS: -1 for failure
+ *   SIDE EFFECTS: none
+ */
+int32_t write_directory( int32_t fd, const void* buf , int32_t nbytes){
+	return -1;
+}
+/* 
+ * close_directory
+ *   Description: close the file
+ *	 INPUTS: none
+ *   OUTPUTS: -1 for failure, 0 on success
+ *   SIDE EFFECTS: none
+ */
+int32_t close_directory(int32_t fd){
+	return 0;
+}
+
+/* 
+ * write_file_system
+ *   Description: write the file
+ *	 INPUTS: none
+ *   OUTPUTS: -1 for failure
+ *   SIDE EFFECTS: none
+ */
+int32_t write_file_system( int32_t fd, const void* buf , int32_t nbytes) {
+  return -1 ;
+
+}
+
+/* 
+ * open_file_system
+ *   Description: open the file system
+ *	 INPUTS: filename
+ *   OUTPUTS: 0
+ *   SIDE EFFECTS: none
+ */
+int32_t open_file_system( const uint8_t* filename) {
+
+  return 0 ;
+}
+
+/* 
+ * close_file_system
+ *   Description: close the file system
+ *	 INPUTS: file pointer
+ *   OUTPUTS: 0
+ *   SIDE EFFECTS: none
+ */
+int32_t close_file_system(int32_t fd){
+	return 0;
+}
+
+/* 
+ * check_executable
+ *   Description: check the first few chararters of the file to see whether is exe
+ *	 INPUTS: dir_entry dentry
+ *   OUTPUTS: 0
+ *   SIDE EFFECTS: none
+ */
+
+int32_t check_executable(dir_entry dentry){
+	uint8_t buffer[4]={0};
+	if (read_data(dentry.inode,0,buffer,4)!=4)
+		return -1;
+	//check .EIF
+	if (buffer[0]==0x7f&&buffer[1]==0x45&&buffer[2]==0x4c&&buffer[3]==0x46)
+		return 0;
+	return -1;
+}
+/* 
+ * get_entry_point
+ *   Description: get the entry point address
+ *	 INPUTS: dir_entry dentry
+ *   OUTPUTS: 0
+ *   SIDE EFFECTS: none
+ */
+uint32_t get_entry_point(dir_entry dentry){
+	uint8_t buffer[4]={0};
+	read_data(dentry.inode,start_addr_offset,buffer,4);
+	//printf("Reading entry point: %#x, %#x, %#x, %#x\n",buffer[0],buffer[1],buffer[2],buffer[3]);
+	//shift each byte
+	return ((uint32_t)buffer[3]<<24|buffer[2]<<16|buffer[1]<<8|buffer[0]);
+}
+
+
+/* 
+ * fd_array_init
+ *   Description: initialize the terminal fd in the fd array
+ *	 INPUTS: fd_array
+ *   OUTPUTS: 0
+ *   SIDE EFFECTS: intialize the terminal read and write in fd array
+ */
+void fd_array_init(file_descriptor_array* array){
+
+	std_in_jmp_table.file_op_open = (open_function) & open_terminal;
+	std_in_jmp_table.file_op_read = (read_function) & read_terminal;
+	std_in_jmp_table.file_op_write = NULL; //(write_function)) & terminal_write;
+	std_in_jmp_table.file_op_close = (close_function) & close_terminal;
+//printf("=========checkpoint2.1=========\n");
+	std_out_jmp_table.file_op_open = (open_function) & open_terminal;
+	std_out_jmp_table.file_op_read = NULL; //(read_function) & read_terminal;
+	std_out_jmp_table.file_op_write = (write_function) & write_terminal;
+	std_out_jmp_table.file_op_close = (close_function) & close_terminal;
+//printf("=========checkpoint2.2=========\n");
+	
+	int i = 0;
+	for(i = 0; i < 2; ++i){
+		//assign the jump table
+		if (i == 0){
+			//printf("1\n");
+	    	array -> files[i].file_table = &std_in_jmp_table;
+	    }	
+		else{
+			//printf("2\n");
+			array -> files[i].file_table = &std_out_jmp_table;
+		};
+	//printf("3\n");
+	array -> files[i].inode = max_inode;
+	//printf("4\n");
+	array -> files[i].position = 0;
+	//printf("5\n");
+	array -> files[i].flags= 1;
+	
+	}
+	
+//printf("=========checkpoint2.3=========\n");
+	for (i = 2; i < fd_maximum; ++i)
+	{
+		array -> files[i].file_table = NULL;
+		array -> files[i].inode = max_inode;
+		array -> files[i].position = 0;
+		array -> files[i].flags= 0;
+	}
+	
+
+}
+
+
+
+
